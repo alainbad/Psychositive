@@ -1,4 +1,5 @@
-# Hala Psychology / Psychositive
+# Psychositive
+### by Hala Touma
 
 A React + TypeScript + Vite + Tailwind application for an independent psychology practice.
 
@@ -33,3 +34,7 @@ See [launch plan](docs/LAUNCH.md) for remaining work and acceptance criteria.
 ## Hosting
 
 `npm run build` outputs `dist/`. SPA fallback and security headers are included for compatible hosts. Configure equivalent rules on other hosts. Update CSP only for chosen video/payment providers. No production deployment is included in this commit.
+
+## Navigation and brand
+
+Psychositive is the primary name, with “by Hala Touma” beneath it. The home page contains only the introduction and booking call to action. About, Services, Areas of support, How it works, Psychology Library, Hala’s Thoughts, FAQ, Contact, Booking, and Client portal are separate routes. Main page tabs stay visible at the top on desktop and wrap on mobile. Do not rebuild this as a long scrolling landing page.
