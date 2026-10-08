@@ -1,0 +1,49 @@
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowRight, ArrowLeft, Check, CircleCheck } from 'lucide-react';
+import { Page } from '@/components/psychositive/page';
+import { Button } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
+import { pageMeta } from '@/lib/page-meta';
+import { sessions, getSession, parseBookingSearch, reconcileFormat, dateKey, parseDateKey } from '@/lib/preview-flow';
+import { getSupabase, scheduling, slotsForDate, slotLabel, localDateKey, type Slot, type Reservation } from '@/lib/reservations';
+export const Route=createFileRoute('/booking')({validateSearch:parseBookingSearch,head:()=>pageMeta('Book a session','Choose a session and available time, then send a private reservation request.'),component:Booking});
+function Booking(){
+ const search=Route.useSearch(); const navigate=useNavigate({from:'/booking'});
+ const [step,setStep]=useState(0),[sessionId,setSessionId]=useState<string>(search.session??''),[format,setFormat]=useState(()=>reconcileFormat(search.session??'',''));
+ const [date,setDate]=useState(''),[selected,setSelected]=useState<Slot|null>(null),[slots,setSlots]=useState<Slot[]>([]);
+ const [month,setMonth]=useState<Date|null>(null),[tz,setTz]=useState(''),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[signedIn,setSignedIn]=useState(false),[consent,setConsent]=useState(false),[result,setResult]=useState<Reservation|null>(null);
+ const [key,setKey]=useState(''),[refresh,setRefresh]=useState(0),[cancellationHours,setCancellationHours]=useState(24);
+ useEffect(()=>{setMonth(new Date());setTz(Intl.DateTimeFormat().resolvedOptions().timeZone);setKey(crypto.randomUUID());const db=getSupabase();db.auth.getSession().then(({data})=>setSignedIn(!!data.session));const {data}=db.auth.onAuthStateChange((_event,s)=>setSignedIn(!!s));return()=>data.subscription.unsubscribe();},[]);
+ const session=getSession(sessionId);
+ useEffect(()=>{if(step!==2)return;const timer=setInterval(()=>setRefresh(r=>r+1),60000);return()=>clearInterval(timer);},[step]);
+ useEffect(()=>{
+  if(!month||!session)return;
+  let active=true;setLoading(true);setError('');setSlots([]);
+  const from=new Date(month.getFullYear(),month.getMonth(),1).toISOString(),until=new Date(month.getFullYear(),month.getMonth()+1,1).toISOString();
+  scheduling<{slots:Slot[];policy:{cancellationHours:number}}>('availability',{session:session.id,from,until}).then(data=>{
+   if(!active)return;setSlots(data.slots);setCancellationHours(data.policy.cancellationHours);
+   setSelected(s=>s&&data.slots.some(t=>t.starts_at===s.starts_at)?s:null);
+  }).catch(e=>{if(active){setError(e.message);setSelected(null);}}).finally(()=>{if(active)setLoading(false);});
+  return()=>{active=false;};
+ },[month,session,refresh]);
+ const times=useMemo(()=>slotsForDate(slots,date),[slots,date]);
+ const availableDates=useMemo(()=>new Set(slots.map(s=>localDateKey(s.starts_at))),[slots]);
+ function choose(id:string){setSessionId(id);setFormat(f=>reconcileFormat(id,f));setSelected(null);setConsent(false);setKey(crypto.randomUUID());const sid=getSession(id)?.id;navigate({search:sid?{session:sid}:{},replace:true});}
+ async function login(){setBusy(true);setError('');try{const {error}=await getSupabase().auth.signInWithPassword({email,password});if(error)throw error;setPassword('');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+ async function reserve(){if(!session||!selected||!signedIn||!consent)return;setBusy(true);setError('');try{
+  const data=await scheduling<{reservation:Reservation}>('request',{session:session.id,start:selected.starts_at,format,key,consent});setResult(data.reservation);setPassword('');
+ }catch(e){setError((e as Error).message);setRefresh(r=>r+1);setStep(2);}finally{setBusy(false);}}
+ const canContinue=step===0?!!session:step===1?!!format:step===2?!!selected&&!loading:consent&&signedIn;
+ return <Page eyebrow="A considered first step" title="Begin at your own pace." intro="Choose an available time and send a reservation request. Hala will confirm suitability, fees and the next steps before your session."><div className="booking-layout"><aside><ol className="step-list">{['Your session','Your preference','Date & time','Review & reserve'].map((label,i)=><li key={label} data-current={step===i}><span className="step-dot">{step>i||result?<Check size={12}/>:i+1}</span>{label}</li>)}</ol></aside><div className="booking-form">
+ {error&&<div className="notice mb-5" role="alert">{error}</div>}
+ {result?<div role="status"><CircleCheck size={35} className="text-primary mb-5"/><h2>Reservation request received.</h2><p>Your {session?.durationMinutes}-minute time is reserved while Hala reviews your request. This is not yet a confirmed clinical appointment. No payment was taken.</p><Summary sessionId={sessionId} format={format} slot={result} tz={tz}/><p className="small-label mt-4">Reference: {result.id}</p><Button asChild className="mt-6"><Link to="/portal">View my reservations</Link></Button></div>:<>
+ {step===0&&<><h2>What feels like a starting point?</h2><p>Session lengths are set. Fees will be confirmed before the appointment.</p><fieldset className="choice-list"><legend className="sr-only">Session option</legend>{sessions.map(s=><label className="choice" key={s.id}><input type="radio" name="session" checked={sessionId===s.id} onChange={()=>choose(s.id)}/><span><strong>{s.name} · {s.durationMinutes} min</strong><small>{s.summary}</small></span></label>)}</fieldset></>}
+ {step===1&&session&&<><h2>How would you prefer to connect?</h2><fieldset className="choice-list"><legend className="sr-only">Session format</legend>{session.formats.map(f=><label key={f} className="choice"><input type="radio" name="format" checked={format===f} onChange={()=>{setFormat(f);setConsent(false);setKey(crypto.randomUUID());}}/><span><strong>{f}</strong><small>{f==='Video'?'An online face-to-face conversation.':'An online audio-only conversation.'}</small></span></label>)}</fieldset></>}
+ {step===2&&session&&<><h2>Choose your date and time.</h2><p>{session.durationMinutes} minutes · Times shown in {tz||'your time zone'}.</p><div className="schedule-grid"><div className="calendar-box">{month&&<Calendar mode="single" month={month} onMonthChange={m=>{setMonth(m);setSelected(null);setDate('');}} selected={date?parseDateKey(date):undefined} onSelect={d=>{setDate(d?dateKey(d):'');setSelected(null);setConsent(false);setKey(crypto.randomUUID());}} disabled={d=>loading||!availableDates.has(dateKey(d))} weekStartsOn={1}/>}</div><div aria-live="polite">{loading?<p>Checking availability…</p>:slots.length===0?<><p>No available times this month.</p><p className="small-label">Try another month or <Link to="/contact" className="underline">contact the practice</Link>.</p></>:!date?<p>Select an available date.</p>:<div className="time-grid" role="radiogroup" aria-label="Available session times">{times.map(s=><button key={s.starts_at} type="button" className="time-chip" role="radio" aria-checked={selected?.starts_at===s.starts_at} onClick={()=>{setSelected(s);setConsent(false);setKey(crypto.randomUUID());}}>{slotLabel(s)}</button>)}</div>}</div></div><div className="notice mt-6">Availability updates every minute. Selecting a time does not hold it; your reservation is saved after you submit your request.</div></>}
+ {step===3&&<><h2>A moment to review.</h2><Summary sessionId={sessionId} format={format} slot={selected} tz={tz}/>{!signedIn&&<div className="portal-form mt-5"><h3>Sign in to reserve privately.</h3><div className="field"><label htmlFor="booking-email">Email</label><input id="booking-email" type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)}/></div><div className="field"><label htmlFor="booking-password">Password</label><input id="booking-password" type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)}/></div><Button type="button" disabled={busy||!email||!password} onClick={login}>Sign in</Button><p className="small-label mt-3">New here? <Link to="/portal" className="underline">Create your account</Link>, then return to booking.</p></div>}<label className="consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/><span>I agree to store these scheduling details and send a reservation request to Hala. I understand the appointment and fee still need confirmation, no payment is taken here, and online cancellation closes {cancellationHours} hours before the session. I have reviewed the <Link to="/privacy">privacy information</Link> and <Link to="/consent">consent overview</Link>. Clinical telehealth consent will be completed separately.</span></label></>}
+ <div className="form-buttons"><Button variant="outline" disabled={step===0||busy} onClick={()=>setStep(s=>s-1)}><ArrowLeft/>Back</Button><Button disabled={!canContinue||busy} onClick={()=>step<3?setStep(s=>s+1):reserve()}>{busy?'Please wait…':step===3?'Send reservation request':'Continue'}<ArrowRight/></Button></div></>}
+ </div></div></Page>;
+}
+function Summary({sessionId,format,slot,tz}:{sessionId:string;format:string;slot:Slot|null;tz:string}){const s=getSession(sessionId);return <dl>{[['Service',s?.name],['Duration',`${s?.durationMinutes} minutes`],['Format',format],['Date',slot?new Date(slot.starts_at).toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}):'—'],['Start – end',slot?slotLabel(slot):'—'],['Time zone',tz],['Fee','To be confirmed before the appointment.']].map(([label,value])=><div key={label} className="pending"><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;}
